@@ -322,6 +322,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     let sessionDirectory = projectDirectory
     let client = sdk().client
+    let createdSessionWorktree = false
 
     if (isNewSession) {
       if (worktreeSelection === "create") {
@@ -345,6 +346,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         }
         WorktreeState.pending(sdk().scope, createdWorktree.directory)
         sessionDirectory = createdWorktree.directory
+        createdSessionWorktree = true
       }
 
       if (worktreeSelection !== "main" && worktreeSelection !== "create") {
@@ -515,6 +517,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     clearInput()
 
     const waitForWorktree = async () => {
+      if (createdSessionWorktree) return true
+
       const worktree = WorktreeState.get(sdk().scope, sessionDirectory)
       if (!worktree || worktree.status !== "pending") return true
 
