@@ -14,9 +14,13 @@ import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
+import { Project } from "@/project/project"
+import { Worktree } from "@/worktree"
+import { InstanceStore } from "@/project/instance-store"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { Cause, Effect, Option, Schema, Scope } from "effect"
+import path from "node:path"
 import * as Stream from "effect/Stream"
 import { InstanceState } from "@/effect/instance-state"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
@@ -59,6 +63,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const todoSvc = yield* Todo.Service
     const summary = yield* SessionSummary.Service
     const events = yield* EventV2Bridge.Service
+    const projectSvc = yield* Project.Service
+    const worktreeSvc = yield* Worktree.Service
+    const store = yield* InstanceStore.Service
     const scope = yield* Scope.Scope
 
     const list = Effect.fn("SessionHttpApi.list")(function* (ctx: { query: typeof ListQuery.Type }) {
@@ -175,8 +182,32 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* create({ payload })
     })
 
+    const removeWorktreeForDeletedSession = Effect.fn("SessionHttpApi.removeWorktreeForDeletedSession")(function* (
+      current: Session.Info,
+    ) {
+      if (current.parentID) return
+      const projectInfo = yield* projectSvc.get(current.projectID)
+      if (!projectInfo || projectInfo.vcs !== "git") return
+      const directory = path.resolve(current.directory)
+      if (directory === path.resolve(projectInfo.worktree)) return
+      const sandbox = projectInfo.sandboxes.find((item) => path.resolve(item) === directory)
+      if (!sandbox) return
+      const remaining = yield* session.listGlobal({ directory: current.directory, roots: true, archived: true })
+      if (remaining.length > 0) return
+
+      yield* store.provide(
+        { directory: projectInfo.worktree, worktree: projectInfo.worktree, project: projectInfo },
+        worktreeSvc.remove({ directory: sandbox }),
+      )
+      yield* projectSvc.removeSandbox(current.projectID, sandbox)
+    })
+
     const remove = Effect.fn("SessionHttpApi.remove")(function* (ctx: { params: { sessionID: SessionID } }) {
+      const current = yield* requireSession(ctx.params.sessionID)
       yield* SessionError.mapStorageNotFound(session.remove(ctx.params.sessionID))
+      yield* removeWorktreeForDeletedSession(current).pipe(
+        Effect.catchCause((cause) => Effect.logError("failed to remove session worktree", { sessionID: current.id, cause })),
+      )
       return true
     })
 

@@ -2,7 +2,7 @@ import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { afterEach, describe, expect } from "bun:test"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { mkdir } from "node:fs/promises"
+import { mkdir, stat } from "node:fs/promises"
 import path from "node:path"
 import { Cause, Config, Effect, Exit, Layer } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
@@ -15,6 +15,7 @@ import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { registerAdapter } from "../../src/control-plane/adapters"
 import type { WorkspaceAdapter } from "../../src/control-plane/types"
 import { Workspace } from "../../src/control-plane/workspace"
+import { Worktree } from "@/worktree"
 
 import { InstanceBootstrap as InstanceBootstrapService } from "../../src/project/bootstrap-service"
 import { InstanceStore } from "../../src/project/instance-store"
@@ -44,7 +45,7 @@ const noopBootstrapLayer = Layer.succeed(
   InstanceBootstrapService.Service.of({ run: Effect.void }),
 )
 const appLayer = AppNodeBuilder.build(
-  LayerNode.group([InstanceStore.node, Project.node, Session.node, Workspace.node, Database.node, Ripgrep.node]),
+  LayerNode.group([InstanceStore.node, Project.node, Session.node, Workspace.node, Worktree.node, Database.node, Ripgrep.node]),
   [[InstanceStore.bootstrapNode, noopBootstrapLayer]],
 )
 const servedRoutes: Layer.Layer<never, Config.ConfigError, HttpServer.HttpServer> = HttpRouter.serve(
@@ -60,6 +61,7 @@ const httpApiLayer = servedRoutes.pipe(
   Layer.provideMerge(NodeServices.layer),
 )
 const it = testEffect(Layer.mergeAll(appLayer, httpApiLayer))
+const testWorktreeMutations = process.platform === "win32" ? it.instance.skip : it.instance
 
 function pathFor(path: string, params: Record<string, string>) {
   return Object.entries(params).reduce((result, [key, value]) => result.replace(`:${key}`, value), path)
@@ -226,6 +228,20 @@ function responseJson(response: HttpClientResponse.HttpClientResponse) {
 
 function requestJson<T>(path: string, init?: RequestInit) {
   return request(path, init).pipe(Effect.flatMap(json<T>))
+}
+
+function isMissingPath(error: unknown) {
+  return error instanceof Error && "code" in error && error.code === "ENOENT"
+}
+
+function directoryExists(directory: string) {
+  return Effect.tryPromise({
+    try: () => stat(directory),
+    catch: (error) => error,
+  }).pipe(
+    Effect.map((info) => info.isDirectory()),
+    Effect.catchIf(isMissingPath, () => Effect.succeed(false)),
+  )
 }
 
 afterEach(async () => {
@@ -788,6 +804,72 @@ describe("session HttpApi", () => {
             headers,
           }),
         ).toBe(true)
+      }),
+    { git: true, config: { formatter: false, lsp: false, share: "disabled" } },
+  )
+
+  testWorktreeMutations(
+    "delete removes the session worktree sandbox",
+    () =>
+      Effect.gen(function* () {
+        const worktree = yield* Worktree.Service
+        const project = yield* Project.Service
+        const info = yield* worktree.create({ name: "delete-session-worktree" })
+        const created = yield* requestJson<Session.Info>(SessionPaths.create, {
+          method: "POST",
+          headers: { "x-opencode-directory": info.directory, "content-type": "application/json" },
+          body: JSON.stringify({ title: "delete worktree" }),
+        })
+        yield* Effect.addFinalizer(() =>
+          Effect.all([worktree.remove({ directory: info.directory }), project.removeSandbox(created.projectID, info.directory)], {
+            discard: true,
+          }).pipe(Effect.ignore),
+        )
+
+        expect(
+          yield* requestJson<boolean>(pathFor(SessionPaths.remove, { sessionID: created.id }), {
+            method: "DELETE",
+            headers: { "x-opencode-directory": info.directory },
+          }),
+        ).toBe(true)
+        expect(yield* directoryExists(info.directory)).toBe(false)
+        expect(yield* project.sandboxes(created.projectID)).not.toContain(info.directory)
+      }),
+    { git: true, config: { formatter: false, lsp: false, share: "disabled" } },
+  )
+
+  testWorktreeMutations(
+    "archive leaves the session worktree sandbox",
+    () =>
+      Effect.gen(function* () {
+        const worktree = yield* Worktree.Service
+        const project = yield* Project.Service
+        const info = yield* worktree.create({ name: "archive-session-worktree" })
+        const created = yield* requestJson<Session.Info>(SessionPaths.create, {
+          method: "POST",
+          headers: { "x-opencode-directory": info.directory, "content-type": "application/json" },
+          body: JSON.stringify({ title: "archive worktree" }),
+        })
+        yield* Effect.addFinalizer(() =>
+          Effect.all([
+            requestJson<boolean>(pathFor(SessionPaths.remove, { sessionID: created.id }), {
+              method: "DELETE",
+              headers: { "x-opencode-directory": info.directory },
+            }),
+            worktree.remove({ directory: info.directory }),
+            project.removeSandbox(created.projectID, info.directory),
+          ], { discard: true }).pipe(Effect.ignore),
+        )
+
+        const updated = yield* requestJson<Session.Info>(pathFor(SessionPaths.update, { sessionID: created.id }), {
+          method: "PATCH",
+          headers: { "x-opencode-directory": info.directory, "content-type": "application/json" },
+          body: JSON.stringify({ time: { archived: 1 } }),
+        })
+
+        expect(updated.time.archived).toBe(1)
+        expect(yield* directoryExists(info.directory)).toBe(true)
+        expect(yield* project.sandboxes(created.projectID)).toContain(info.directory)
       }),
     { git: true, config: { formatter: false, lsp: false, share: "disabled" } },
   )
