@@ -3,6 +3,20 @@ import { ScopedKey, type ServerScope } from "@/utils/server-scope"
 const normalize = (directory: string) => directory.replace(/[\\/]+$/, "")
 const key = (scope: ServerScope, directory: string) => ScopedKey.from(scope, normalize(directory))
 
+type NewSessionWorktreeInput = {
+  readonly directory: string
+  readonly projectWorktree: string | undefined
+  readonly stored: string | undefined
+  readonly vcs: string | undefined
+}
+
+export function defaultNewSessionWorktree(input: NewSessionWorktreeInput) {
+  if (input.stored !== undefined) return input.stored
+  if (input.vcs !== "git") return "main"
+  if (input.projectWorktree && input.directory !== input.projectWorktree) return input.directory
+  return "create"
+}
+
 type State =
   | {
       status: "pending"

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Worktree } from "./worktree"
+import { Worktree, defaultNewSessionWorktree } from "./worktree"
 import { ServerScope } from "./server-scope"
 
 const dir = (name: string) => `/tmp/opencode-worktree-${name}-${crypto.randomUUID()}`
@@ -54,5 +54,51 @@ describe("Worktree", () => {
 
     expect(Worktree.get(scope, key)).toEqual({ status: "ready" })
     expect(Worktree.get(remote, key)).toEqual({ status: "failed", message: "remote failed" })
+  })
+})
+
+describe("defaultNewSessionWorktree", () => {
+  test("returns create for git project roots without stored selection", () => {
+    expect(
+      defaultNewSessionWorktree({
+        directory: "/repo/main",
+        projectWorktree: "/repo/main",
+        stored: undefined,
+        vcs: "git",
+      }),
+    ).toBe("create")
+  })
+
+  test("returns main outside git projects", () => {
+    expect(
+      defaultNewSessionWorktree({
+        directory: "/repo/main",
+        projectWorktree: "/repo/main",
+        stored: undefined,
+        vcs: undefined,
+      }),
+    ).toBe("main")
+  })
+
+  test("keeps the current directory when already in a worktree", () => {
+    expect(
+      defaultNewSessionWorktree({
+        directory: "/repo/worktree-a",
+        projectWorktree: "/repo/main",
+        stored: undefined,
+        vcs: "git",
+      }),
+    ).toBe("/repo/worktree-a")
+  })
+
+  test("honors stored selections", () => {
+    expect(
+      defaultNewSessionWorktree({
+        directory: "/repo/main",
+        projectWorktree: "/repo/main",
+        stored: "/repo/worktree-a",
+        vcs: "git",
+      }),
+    ).toBe("/repo/worktree-a")
   })
 })

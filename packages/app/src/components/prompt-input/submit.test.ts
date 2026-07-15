@@ -6,6 +6,7 @@ let createPromptSubmit: typeof import("./submit").createPromptSubmit
 
 const createdClients: string[] = []
 const createdSessions: string[] = []
+const createdWorktrees: Array<{ directory: string }> = []
 const enabledAutoAccept: Array<{ server: string; sessionID: string; directory: string }> = []
 const optimistic: Array<{
   directory?: string
@@ -77,7 +78,10 @@ const clientFor = (directory: string) => {
       abort: async () => ({ data: undefined }),
     },
     worktree: {
-      create: async () => ({ data: { directory: `${directory}/new` } }),
+      create: async (input: { directory: string }) => {
+        createdWorktrees.push(input)
+        return { data: { directory: `${input.directory}/new` } }
+      },
     },
   }
 }
@@ -244,6 +248,7 @@ beforeAll(async () => {
 beforeEach(() => {
   createdClients.length = 0
   createdSessions.length = 0
+  createdWorktrees.length = 0
   enabledAutoAccept.length = 0
   optimistic.length = 0
   optimisticSeeded.length = 0
@@ -261,6 +266,35 @@ beforeEach(() => {
 })
 
 describe("prompt submit worktree selection", () => {
+  test("creates a worktree before creating a new session when requested", async () => {
+    const submit = createPromptSubmit({
+      prompt,
+      info: () => undefined,
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "shell",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      newSessionWorktree: () => "create",
+      onNewSessionWorktreeReset: () => undefined,
+      onSubmit: () => undefined,
+    })
+
+    await submit.handleSubmit(new Event("submit"))
+
+    expect(createdWorktrees).toEqual([{ directory: "/repo/main" }])
+    expect(createdClients).toEqual(["/repo/main/new"])
+    expect(createdSessions).toEqual(["/repo/main/new"])
+    expect(sentShell).toEqual(["/repo/main/new"])
+  })
+
   test("reads the latest worktree accessor value per submit", async () => {
     const submit = createPromptSubmit({
       prompt,

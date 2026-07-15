@@ -30,6 +30,7 @@ import { useCommand } from "@/context/command"
 import { useProviders } from "@/hooks/use-providers"
 import { useSettingsCommand, useSettingsDialog } from "@/components/settings-dialog"
 import { Persist, persisted } from "@/utils/persist"
+import { defaultNewSessionWorktree } from "@/utils/worktree"
 import createPresence from "solid-presence"
 import { useLocal } from "@/context/local"
 import { createPromptModelSelection } from "@/pages/session/composer/prompt-model-selection"
@@ -91,11 +92,13 @@ export default function NewSessionPage() {
 
   const showWorkspaceBar = createMemo(() => workspaceBarEnabled && sync().project?.vcs === "git")
   const newSessionWorktree = createMemo(() => {
-    if (!showWorkspaceBar()) return "main"
-    if (store.worktree) return store.worktree
     const project = sync().project
-    if (project && sdk().directory !== project.worktree) return sdk().directory
-    return "main"
+    return defaultNewSessionWorktree({
+      directory: sdk().directory,
+      projectWorktree: project?.worktree,
+      stored: store.worktree,
+      vcs: project?.vcs,
+    })
   })
   const projectRoot = createMemo(() => sync().project?.worktree ?? sdk().directory)
   const localBranch = createMemo(() => serverSync().child(projectRoot())[0].vcs?.branch)
